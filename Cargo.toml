@@ -50,6 +50,9 @@ default = [
 	"virtio-fs",
 	"virtio-net",
 	"virtio-vsock",
+    "newlib",
+    "vga",
+    "mman",
 ]
 
 #! ### Syscall Features
