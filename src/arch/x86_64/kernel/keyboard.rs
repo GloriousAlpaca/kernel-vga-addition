@@ -23,14 +23,14 @@ pub(crate) fn get_keyboard_handler() -> (u8, fn()) {
 			let _ = data_port.read();
 		}
 
-		// 2. Konfiguration vom PS/2-Controller auslesen
+		// 2. Konfiguration vom PS/2-Controller auslesen (Befehl 0x20)
 		cmd_port.write(0x20);
 		let mut config = data_port.read();
 
 		// 3. Bit 0 aktivieren (= Hardware-Interrupts für die Tastatur einschalten!)
 		config |= 0b0000_0001;
 
-		// 4. Neue Konfiguration an den Controller zurückschreiben
+		// 4. Neue Konfiguration an den Controller zurückschreiben (Befehl 0x60)
 		cmd_port.write(0x60);
 		data_port.write(config);
 	}

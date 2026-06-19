@@ -164,7 +164,17 @@ pub(crate) fn install() {
 }
 
 pub(crate) fn install_handlers() {
-	IRQ_HANDLERS.set(get_interrupt_handlers()).unwrap();
+	let mut handlers = get_interrupt_handlers();
+
+	// Register the architecture-specific legacy PS/2 keyboard interrupt (IRQ 1)
+	#[cfg(feature = "keyboard")]
+	{
+		use crate::arch::x86_64::kernel::keyboard::get_keyboard_handler;
+		let (irq, handler) = get_keyboard_handler();
+		handlers.entry(irq).or_default().push_back(handler);
+	}
+
+	IRQ_HANDLERS.set(handlers).unwrap();
 }
 
 fn handle_interrupt(stack_frame: ExceptionStackFrame, index: u8, _error_code: Option<u64>) {

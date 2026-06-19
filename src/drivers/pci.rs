@@ -446,13 +446,6 @@ pub(crate) fn get_interrupt_handlers() -> HashMap<InterruptLine, InterruptHandle
 			.push_back(crate::executor::network::network_handler);
 	}
 
-	// In src/drivers/pci.rs, Funktion get_interrupt_handlers()
-	#[cfg(all(target_arch = "x86_64", feature = "keyboard"))]
-	{
-		let (irq_number, handler) = crate::arch::x86_64::kernel::keyboard::get_keyboard_handler();
-		handlers.entry(irq_number).or_default().push_back(handler);
-	}
-
 	handlers
 }
 
