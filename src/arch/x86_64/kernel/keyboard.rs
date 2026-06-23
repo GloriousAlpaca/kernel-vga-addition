@@ -13,7 +13,6 @@ static READ_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 #[allow(dead_code)]
 pub(crate) fn get_keyboard_handler() -> (u8, fn()) {
-	println!(">>> TRACE: get_keyboard_handler() wurde vom Kernel aufgerufen!");
 	unsafe {
 		let mut cmd_port = Port::<u8>::new(0x64);
 		let mut data_port = Port::<u8>::new(0x60);
@@ -41,7 +40,6 @@ pub(crate) fn get_keyboard_handler() -> (u8, fn()) {
 		let write_idx = WRITE_INDEX.load(Ordering::Relaxed);
 		let next_write_idx = write_idx.wrapping_add(1) % BUFFER_SIZE;
 		let read_idx = READ_INDEX.load(Ordering::Acquire);
-		println!("*** KEYBOARD INTERRUPT! Scancode: {:#04x} ***", scancode);
 		//Check if the buffer is full (next write index would overwrite the read index)
 		if next_write_idx != read_idx {
 			KEYBOARD_BUFFER[write_idx].store(scancode, Ordering::Release);
