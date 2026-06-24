@@ -80,10 +80,7 @@ bitflags! {
 }
 
 impl PageTableEntryFlags {
-	/// An empty set of flags for unused/zeroed table entries.
-	/// Needed as long as empty() is no const function.
-	const BLANK: PageTableEntryFlags = PageTableEntryFlags::empty();
-
+	#[expect(dead_code)]
 	pub fn present(&mut self) -> &mut Self {
 		self.insert(PageTableEntryFlags::PRESENT);
 		self
@@ -106,6 +103,7 @@ impl PageTableEntryFlags {
 		self
 	}
 
+	#[expect(dead_code)]
 	pub fn read_only(&mut self) -> &mut Self {
 		self.insert(PageTableEntryFlags::READ_ONLY);
 		self
@@ -201,7 +199,7 @@ pub enum LargePageSize {}
 impl PageSize for LargePageSize {
 	const SIZE: u64 = 2 * 1024 * 1024;
 	const MAP_LEVEL: usize = 2;
-	const MAP_EXTRA_FLAG: PageTableEntryFlags = PageTableEntryFlags::BLANK;
+	const MAP_EXTRA_FLAG: PageTableEntryFlags = PageTableEntryFlags::empty();
 }
 
 /// A 1 GiB page mapped in the L1Table.
@@ -210,7 +208,7 @@ pub enum HugePageSize {}
 impl PageSize for HugePageSize {
 	const SIZE: u64 = 1024 * 1024 * 1024;
 	const MAP_LEVEL: usize = 1;
-	const MAP_EXTRA_FLAG: PageTableEntryFlags = PageTableEntryFlags::BLANK;
+	const MAP_EXTRA_FLAG: PageTableEntryFlags = PageTableEntryFlags::empty();
 }
 
 /// A memory page of the size given by S.
@@ -412,9 +410,9 @@ impl<L: PageTableLevel> PageTableMethods for PageTable<L> {
 			page.flush_from_tlb();
 		}
 
-		if flags == PageTableEntryFlags::BLANK {
-			// in this case we unmap the pages
-			self.entries[index].set(physical_address, flags);
+		if flags == PageTableEntryFlags::empty() {
+			// We already unmapped the page
+			return;
 		} else {
 			self.entries[index].set(physical_address, S::MAP_EXTRA_FLAG | flags);
 		}
@@ -706,7 +704,7 @@ pub fn unmap<S: PageSize>(virtual_address: VirtAddr, count: usize) {
 
 	let range = get_page_range::<S>(virtual_address, count);
 	let root_pagetable = unsafe { &mut *(L0TABLE_ADDRESS.as_mut_ptr::<PageTable<L0Table>>()) };
-	root_pagetable.map_pages(range, PhysAddr::zero(), PageTableEntryFlags::BLANK);
+	root_pagetable.map_pages(range, PhysAddr::zero(), PageTableEntryFlags::empty());
 }
 
 pub unsafe fn init() {

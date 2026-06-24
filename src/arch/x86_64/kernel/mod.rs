@@ -9,12 +9,15 @@ use hermit_entry::boot_info::{PlatformInfo, RawBootInfo};
 use memory_addresses::PhysAddr;
 use x86_64::registers::control::{Cr0, Cr4};
 
+pub(crate) use self::apic::{set_oneshot_timer, wakeup_core};
 use crate::arch::x86_64::kernel::core_local::*;
 use crate::env::{self, is_uhyve};
 
 #[cfg(feature = "acpi")]
 pub mod acpi;
 pub mod apic;
+#[cfg(feature = "bga")]
+pub mod bga;
 pub mod core_local;
 pub mod gdt;
 pub mod interrupts;

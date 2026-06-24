@@ -19,7 +19,7 @@ use volatile::VolatileRef;
 use volatile::access::ReadOnly;
 
 use super::virtio::virtqueue::VirtQueue;
-use crate::config::VIRTIO_MAX_QUEUE_SIZE;
+use crate::config::{VIRTIO_MAX_QUEUE_SIZE, VSOCK_PACKET_SIZE};
 use crate::drivers::Driver;
 use crate::drivers::virtio::ControlRegisters;
 use crate::drivers::virtio::error::VirtioVsockError;
@@ -72,7 +72,7 @@ impl RxQueue {
 		Self {
 			vq: None,
 
-			packet_size: crate::VSOCK_PACKET_SIZE,
+			packet_size: VSOCK_PACKET_SIZE,
 		}
 	}
 
@@ -138,7 +138,7 @@ impl TxQueue {
 	pub fn new() -> Self {
 		Self {
 			vq: None,
-			packet_length: crate::VSOCK_PACKET_SIZE + size_of::<Hdr>() as u32,
+			packet_length: VSOCK_PACKET_SIZE + size_of::<Hdr>() as u32,
 		}
 	}
 
@@ -308,16 +308,13 @@ impl VirtioVsockDriver {
 	pub fn handle_interrupt(&mut self) {
 		let status = self.isr_stat.acknowledge();
 
-		#[cfg(not(feature = "pci"))]
-		if status.contains(virtio::mmio::InterruptStatus::CONFIGURATION_CHANGE_NOTIFICATION) {
-			info!("Configuration changes are not possible! Aborting");
-			todo!("Implement possibility to change config on the fly...")
-		}
+		let config_change = cfg_select! {
+			feature = "pci" => virtio::pci::IsrStatus::DEVICE_CONFIGURATION_INTERRUPT,
+			_ => virtio::mmio::InterruptStatus::CONFIGURATION_CHANGE_NOTIFICATION,
+		};
 
-		#[cfg(feature = "pci")]
-		if status.contains(virtio::pci::IsrStatus::DEVICE_CONFIGURATION_INTERRUPT) {
-			info!("Configuration changes are not possible! Aborting");
-			todo!("Implement possibility to change config on the fly...")
+		if status.contains(config_change) && self.com_cfg.does_device_need_reset() {
+			todo!("Device configuration change notification cannot be handled yet");
 		}
 	}
 

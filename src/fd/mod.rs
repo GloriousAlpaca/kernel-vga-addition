@@ -1,10 +1,14 @@
 use alloc::sync::Arc;
+#[cfg(any(feature = "net", feature = "virtio-vsock"))]
+use core::ffi::c_int;
 use core::future;
 use core::mem::MaybeUninit;
 use core::pin::pin;
 use core::task::Poll::{Pending, Ready};
 use core::time::Duration;
 
+#[cfg(any(feature = "net", feature = "virtio-vsock"))]
+use num_enum::TryFromPrimitive;
 #[cfg(feature = "net")]
 use smoltcp::wire::{IpEndpoint, IpListenEndpoint};
 
@@ -17,6 +21,7 @@ use crate::io;
 
 mod delegate;
 mod eventfd;
+pub(crate) mod random_file;
 #[cfg(any(feature = "net", feature = "virtio-vsock"))]
 pub(crate) mod socket;
 pub(crate) mod stdio;
@@ -43,10 +48,13 @@ pub(crate) enum ListenEndpoint {
 	Vsock(socket::vsock::VsockListenEndpoint),
 }
 
-#[allow(dead_code)]
-#[derive(Debug, PartialEq)]
+#[cfg(any(feature = "net", feature = "virtio-vsock"))]
+#[derive(TryFromPrimitive, PartialEq, Eq, Clone, Copy, Debug)]
+#[repr(i32)]
 pub(crate) enum SocketOption {
-	TcpNoDelay,
+	TcpNodelay = 1,
+	SoSndbuf = 0x1001,
+	SoRcvbuf = 0x1002,
 }
 
 pub(crate) type RawFd = i32;
@@ -204,13 +212,15 @@ pub(crate) trait ObjectInterface: Sync + Send {
 
 	/// `async_read` attempts to read `len` bytes from the object references
 	/// by the descriptor
-	async fn read(&self, _buf: &mut [u8]) -> io::Result<usize> {
+	async fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
+		let _buf = buf;
 		Err(Errno::Nosys)
 	}
 
 	/// `async_write` attempts to write `len` bytes to the object references
 	/// by the descriptor
-	async fn write(&self, _buf: &[u8]) -> io::Result<usize> {
+	async fn write(&self, buf: &[u8]) -> io::Result<usize> {
+		let _buf = buf;
 		Err(Errno::Nosys)
 	}
 
@@ -227,7 +237,8 @@ pub(crate) trait ObjectInterface: Sync + Send {
 	/// `getdents` fills the given buffer `_buf` with [`Dirent64`](crate::syscalls::Dirent64)
 	/// formatted entries of a directory, imitating the Linux `getdents64` syscall.
 	/// On success, the number of bytes read is returned.  On end of directory, 0 is returned.  On error, -1 is returned
-	async fn getdents(&self, _buf: &mut [MaybeUninit<u8>]) -> io::Result<usize> {
+	async fn getdents(&self, buf: &mut [MaybeUninit<u8>]) -> io::Result<usize> {
+		let _buf = buf;
 		Err(Errno::Inval)
 	}
 
@@ -263,7 +274,7 @@ pub(crate) trait ObjectInterface: Sync + Send {
 
 	/// `getsockopt` gets options on sockets
 	#[cfg(any(feature = "net", feature = "virtio-vsock"))]
-	async fn getsockopt(&self, _opt: SocketOption) -> io::Result<bool> {
+	async fn getsockopt(&self, _opt: SocketOption) -> io::Result<c_int> {
 		Err(Errno::Notsock)
 	}
 
@@ -282,7 +293,8 @@ pub(crate) trait ObjectInterface: Sync + Send {
 
 	/// Receive a message from a socket
 	#[cfg(any(feature = "net", feature = "virtio-vsock"))]
-	async fn recvfrom(&self, _buffer: &mut [MaybeUninit<u8>]) -> io::Result<(usize, Endpoint)> {
+	async fn recvfrom(&self, buf: &mut [u8]) -> io::Result<(usize, Endpoint)> {
+		let _buf = buf;
 		Err(Errno::Nosys)
 	}
 
@@ -294,7 +306,8 @@ pub(crate) trait ObjectInterface: Sync + Send {
 	/// be sent to the address specified by dest_addr (overriding the pre-specified peer
 	/// address).
 	#[cfg(any(feature = "net", feature = "virtio-vsock"))]
-	async fn sendto(&self, _buffer: &[u8], _endpoint: Endpoint) -> io::Result<usize> {
+	async fn sendto(&self, buf: &[u8], _endpoint: Endpoint) -> io::Result<usize> {
+		let _buf = buf;
 		Err(Errno::Nosys)
 	}
 

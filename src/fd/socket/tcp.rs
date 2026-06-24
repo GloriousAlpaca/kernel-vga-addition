@@ -1,5 +1,6 @@
 use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
+use core::ffi::c_int;
 use core::future;
 use core::sync::atomic::{AtomicU16, Ordering};
 use core::task::Poll;
@@ -9,12 +10,13 @@ use smoltcp::socket::tcp;
 use smoltcp::time::Duration;
 use smoltcp::wire::{IpEndpoint, Ipv4Address, Ipv6Address};
 
+use crate::config::DEFAULT_KEEP_ALIVE_INTERVAL;
 use crate::errno::Errno;
 use crate::executor::block_on;
 use crate::executor::network::{Handle, NIC, wake_network_waker};
 use crate::fd::{self, Endpoint, Fd, ListenEndpoint, ObjectInterface, PollEvent, SocketOption};
+use crate::io;
 use crate::syscalls::socket::Af;
-use crate::{DEFAULT_KEEP_ALIVE_INTERVAL, io};
 
 /// Further receives will be disallowed
 pub const SHUT_RD: i32 = 0;
@@ -24,6 +26,9 @@ pub const SHUT_WR: i32 = 1;
 pub const SHUT_RDWR: i32 = 2;
 /// The default queue size for incoming connections
 pub const DEFAULT_BACKLOG: i32 = 128;
+/// The maximum queue size for incoming connections,
+/// based on the default maximum used by modern Linux.
+pub const SOMAXCONN: i32 = 4096;
 
 fn get_ephemeral_port() -> u16 {
 	static LOCAL_ENDPOINT: AtomicU16 = AtomicU16::new(49152);
@@ -186,7 +191,7 @@ impl ObjectInterface for Socket {
 		.await
 	}
 
-	async fn read(&self, buffer: &mut [u8]) -> io::Result<usize> {
+	async fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
 		future::poll_fn(|cx| {
 			self.with(|socket| {
 				let state = socket.state();
@@ -201,8 +206,8 @@ impl ObjectInterface for Socket {
 							Poll::Ready(
 								socket
 									.recv(|data| {
-										let len = core::cmp::min(buffer.len(), data.len());
-										buffer[..len].copy_from_slice(&data[..len]);
+										let len = core::cmp::min(buf.len(), data.len());
+										buf[..len].copy_from_slice(&data[..len]);
 										(len, len)
 									})
 									.map_err(|_| Errno::Io),
@@ -224,10 +229,10 @@ impl ObjectInterface for Socket {
 		.await
 	}
 
-	async fn write(&self, buffer: &[u8]) -> io::Result<usize> {
+	async fn write(&self, buf: &[u8]) -> io::Result<usize> {
 		let mut pos: usize = 0;
 
-		while pos < buffer.len() {
+		while pos < buf.len() {
 			let n = future::poll_fn(|cx| {
 				self.with(|socket| {
 					match socket.state() {
@@ -240,9 +245,7 @@ impl ObjectInterface for Socket {
 						| tcp::State::TimeWait => Poll::Ready(Err(Errno::Io)),
 						_ => {
 							if socket.can_send() {
-								Poll::Ready(
-									socket.send_slice(&buffer[pos..]).map_err(|_| Errno::Io),
-								)
+								Poll::Ready(socket.send_slice(&buf[pos..]).map_err(|_| Errno::Io))
 							} else if pos > 0 {
 								// we already send some data => return 0 as signal to stop the
 								// async write
@@ -313,19 +316,24 @@ impl ObjectInterface for Socket {
 		let connection_handle = future::poll_fn(|cx| {
 			let mut guard = NIC.lock();
 			let nic = guard.as_nic_mut().unwrap();
-			let mut socket_handle = None;
 
-			for handle in self.handle.iter() {
-				let s = nic.get_mut_socket::<tcp::Socket<'_>>(*handle);
+			let socket_handle = self
+				.handle
+				.extract_if(.., |handle| {
+					let socket = nic.get_mut_socket::<tcp::Socket<'_>>(*handle);
 
-				if s.is_active() {
-					socket_handle = Some(*handle);
-					break;
-				}
-			}
+					// We are checking not only for ESTABLISHED, but also for CLOSE-WAIT.
+					//
+					// CLOSE-WAIT may occur here when the other side connects to us and
+					// immediately closes their transmit half (our receive half),
+					// potentially sending something in between. It is still useful for
+					// the application to be able to read any received data and to send a
+					// response.
+					socket.may_send()
+				})
+				.next();
 
 			if let Some(handle) = socket_handle {
-				self.handle.remove(&handle);
 				Poll::Ready(Ok(handle))
 			} else if self.is_nonblocking {
 				Poll::Ready(Err(Errno::Again))
@@ -404,7 +412,7 @@ impl ObjectInterface for Socket {
 
 		self.is_listen = true;
 
-		for _ in 1..backlog {
+		for _ in 1..backlog.min(SOMAXCONN) {
 			let handle = nic.create_tcp_handle().unwrap();
 
 			let s = nic.get_mut_socket::<tcp::Socket<'_>>(handle);
@@ -418,7 +426,7 @@ impl ObjectInterface for Socket {
 	}
 
 	async fn setsockopt(&self, opt: SocketOption, optval: bool) -> io::Result<()> {
-		if opt == SocketOption::TcpNoDelay {
+		if opt == SocketOption::TcpNodelay {
 			let mut guard = NIC.lock();
 			let nic = guard.as_nic_mut().unwrap();
 
@@ -433,15 +441,15 @@ impl ObjectInterface for Socket {
 		}
 	}
 
-	async fn getsockopt(&self, opt: SocketOption) -> io::Result<bool> {
-		if opt == SocketOption::TcpNoDelay {
-			let mut guard = NIC.lock();
-			let nic = guard.as_nic_mut().unwrap();
-			let socket = nic.get_mut_socket::<tcp::Socket<'_>>(*self.handle.first().unwrap());
+	async fn getsockopt(&self, opt: SocketOption) -> io::Result<c_int> {
+		let mut guard = NIC.lock();
+		let nic = guard.as_nic_mut().unwrap();
+		let socket = nic.get_mut_socket::<tcp::Socket<'_>>(*self.handle.first().unwrap());
 
-			Ok(socket.nagle_enabled())
-		} else {
-			Err(Errno::Inval)
+		match opt {
+			SocketOption::TcpNodelay => Ok(socket.nagle_enabled().into()),
+			SocketOption::SoSndbuf => Ok(c_int::try_from(socket.send_capacity()).unwrap()),
+			SocketOption::SoRcvbuf => Ok(c_int::try_from(socket.recv_capacity()).unwrap()),
 		}
 	}
 

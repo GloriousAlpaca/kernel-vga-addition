@@ -6,6 +6,7 @@ mod addrinfo;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::ffi::{c_char, c_void};
+use core::mem::MaybeUninit;
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 #[allow(unused_imports)]
 use core::ops::DerefMut;
@@ -27,6 +28,7 @@ use crate::fd::socket::vsock::{self, VsockEndpoint, VsockListenEndpoint};
 use crate::fd::{
 	self, Endpoint, ListenEndpoint, ObjectInterface, SocketOption, get_object, insert_object,
 };
+use crate::init_buf;
 use crate::syscalls::block_on;
 
 #[derive(TryFromPrimitive, IntoPrimitive, PartialEq, Eq, Clone, Copy, Debug)]
@@ -73,12 +75,9 @@ pub const SO_REUSEADDR: i32 = 0x0004;
 pub const SO_KEEPALIVE: i32 = 0x0008;
 pub const SO_BROADCAST: i32 = 0x0020;
 pub const SO_LINGER: i32 = 0x0080;
-pub const SO_SNDBUF: i32 = 0x1001;
-pub const SO_RCVBUF: i32 = 0x1002;
 pub const SO_SNDTIMEO: i32 = 0x1005;
 pub const SO_RCVTIMEO: i32 = 0x1006;
 pub const SO_ERROR: i32 = 0x1007;
-pub const TCP_NODELAY: i32 = 1;
 pub const MSG_PEEK: i32 = 1;
 pub type sa_family_t = u8;
 pub type socklen_t = u32;
@@ -625,8 +624,7 @@ pub extern "C" fn sys_socket(domain: i32, type_: i32, protocol: i32) -> i32 {
 	}
 
 	#[cfg(feature = "net")]
-	if (domain == Af::Inet || domain == Af::Inet6) && (sock == Sock::Stream || sock == Sock::Dgram)
-	{
+	if domain == Af::Inet && matches!(sock, Sock::Stream | Sock::Dgram) {
 		let mut guard = NIC.lock();
 
 		let NetworkState::Initialized(nic) = &mut *guard else {
@@ -932,10 +930,14 @@ pub unsafe extern "C" fn sys_setsockopt(
 		return -i32::from(Errno::Inval);
 	};
 
-	debug!("sys_setsockopt: {fd}, level {level:?}, optname {optname}");
+	let Ok(optname) = SocketOption::try_from(optname) else {
+		return -i32::from(Errno::Inval);
+	};
+
+	debug!("sys_setsockopt: {fd}, level {level:?}, optname {optname:?}");
 
 	if level == Ipproto::Tcp
-		&& optname == TCP_NODELAY
+		&& optname == SocketOption::TcpNodelay
 		&& optlen == u32::try_from(size_of::<i32>()).unwrap()
 	{
 		if optval.is_null() {
@@ -948,12 +950,7 @@ pub unsafe extern "C" fn sys_setsockopt(
 			|e| -i32::from(e),
 			|v| {
 				block_on(
-					async {
-						v.read()
-							.await
-							.setsockopt(SocketOption::TcpNoDelay, value != 0)
-							.await
-					},
+					async { v.read().await.setsockopt(optname, value != 0).await },
 					None,
 				)
 				.map_or_else(|e| -i32::from(e), |()| 0)
@@ -973,13 +970,16 @@ pub unsafe extern "C" fn sys_getsockopt(
 	optval: *mut c_void,
 	optlen: *mut socklen_t,
 ) -> i32 {
-	let Ok(Ok(level)) = u8::try_from(level).map(Ipproto::try_from) else {
+	let Ok(optname) = SocketOption::try_from(optname) else {
 		return -i32::from(Errno::Inval);
 	};
 
-	debug!("sys_getsockopt: {fd}, level {level:?}, optname {optname}");
+	debug!("sys_getsockopt: {fd}, level {level}, optname {optname:?}");
 
-	if level == Ipproto::Tcp && optname == TCP_NODELAY {
+	if level == Ipproto::Tcp as i32 && optname == SocketOption::TcpNodelay
+		|| level == SOL_SOCKET
+			&& (optname == SocketOption::SoSndbuf || optname == SocketOption::SoRcvbuf)
+	{
 		if optval.is_null() || optlen.is_null() {
 			return -i32::from(Errno::Inval);
 		}
@@ -990,18 +990,10 @@ pub unsafe extern "C" fn sys_getsockopt(
 		obj.map_or_else(
 			|e| -i32::from(e),
 			|v| {
-				block_on(
-					async { v.read().await.getsockopt(SocketOption::TcpNoDelay).await },
-					None,
-				)
-				.map_or_else(
+				block_on(async { v.read().await.getsockopt(optname).await }, None).map_or_else(
 					|e| -i32::from(e),
 					|value| {
-						if value {
-							*optval = 1;
-						} else {
-							*optval = 0;
-						}
+						*optval = value;
 						*optlen = size_of::<i32>().try_into().unwrap();
 
 						0
@@ -1106,7 +1098,8 @@ pub extern "C" fn sys_shutdown_socket(fd: i32, how: i32) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sys_recv(fd: i32, buf: *mut u8, len: usize, flags: i32) -> isize {
 	if flags == 0 {
-		let slice = unsafe { slice::from_raw_parts_mut(buf.cast(), len) };
+		let slice = unsafe { slice::from_raw_parts_mut(buf.cast::<MaybeUninit<u8>>(), len) };
+		let slice = init_buf::init_buf(slice);
 		fd::read(fd, slice).map_or_else(
 			|e| isize::try_from(-i32::from(e)).unwrap(),
 			|v| v.try_into().unwrap(),
@@ -1187,7 +1180,8 @@ pub unsafe extern "C" fn sys_recvfrom(
 	addr: *mut sockaddr,
 	addrlen: *mut socklen_t,
 ) -> isize {
-	let slice = unsafe { slice::from_raw_parts_mut(buf.cast(), len) };
+	let slice = unsafe { slice::from_raw_parts_mut(buf.cast::<MaybeUninit<u8>>(), len) };
+	let slice = init_buf::init_buf(slice);
 	let obj = get_object(fd);
 	obj.map_or_else(
 		|e| isize::try_from(-i32::from(e)).unwrap(),

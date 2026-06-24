@@ -1,10 +1,12 @@
+use core::mem::MaybeUninit;
 use core::slice;
 
 use hermit_sync::TicketMutex;
 
-use crate::arch;
+use crate::arch::kernel::processor;
 use crate::entropy::{self, Flags};
 use crate::errno::Errno;
+use crate::init_buf;
 
 static PARK_MILLER_LEHMER_SEED: TicketMutex<u32> = TicketMutex::new(0);
 const RAND_MAX: u64 = 0x7fff_ffff;
@@ -25,22 +27,22 @@ unsafe fn read_entropy(buf: *mut u8, len: usize, flags: u32) -> isize {
 		// Cap the number of bytes to be read at a time to isize::MAX to uphold
 		// the safety guarantees of `from_raw_parts`.
 		let len = usize::min(len, isize::MAX as usize);
-		buf.write_bytes(0, len);
-		slice::from_raw_parts_mut(buf, len)
+		slice::from_raw_parts_mut(buf.cast::<MaybeUninit<u8>>(), len)
 	};
+	let buf = init_buf::init_buf(buf);
 
-	let ret = entropy::read(buf, flags);
-	if ret < 0 {
-		warn!("Unable to read entropy! Fallback to a naive implementation!");
-		for byte in &mut *buf {
-			*byte = (generate_park_miller_lehmer_random_number() & 0xff)
-				.try_into()
-				.unwrap();
-		}
-		buf.len().try_into().unwrap()
-	} else {
-		ret
-	}
+	entropy::read(buf, flags)
+		.unwrap_or_else(|_| {
+			warn!("Unable to read entropy! Fallback to a naive implementation!");
+			for byte in &mut *buf {
+				*byte = (generate_park_miller_lehmer_random_number() & 0xff)
+					.try_into()
+					.unwrap();
+			}
+			buf.len()
+		})
+		.try_into()
+		.unwrap()
 }
 
 /// Fill `len` bytes in `buf` with cryptographically secure random data.
@@ -115,7 +117,7 @@ pub extern "C" fn sys_srand(seed: u32) {
 }
 
 pub(crate) fn init_entropy() {
-	let seed: u32 = arch::processor::get_timestamp() as u32;
+	let seed: u32 = processor::get_timestamp() as u32;
 
 	*PARK_MILLER_LEHMER_SEED.lock() = seed;
 }

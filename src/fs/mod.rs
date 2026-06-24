@@ -1,3 +1,4 @@
+pub(crate) mod dev_directory;
 pub(crate) mod mem;
 #[cfg(feature = "uhyve")]
 pub(crate) mod uhyve;
@@ -5,7 +6,6 @@ pub(crate) mod uhyve;
 pub(crate) mod virtio_fs;
 
 use alloc::borrow::ToOwned;
-#[cfg(any(feature = "uhyve", feature = "virtio-fs"))]
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -98,7 +98,6 @@ pub(crate) trait VfsNode: Send + Sync + fmt::Debug {
 	}
 
 	/// Mounts a file system
-	#[cfg(any(feature = "uhyve", feature = "virtio-fs"))]
 	fn traverse_mount(&self, _path: &str, _obj: Box<dyn VfsNode>) -> io::Result<()> {
 		Err(Errno::Nosys)
 	}
@@ -134,7 +133,8 @@ impl DirectoryReader {
 }
 
 impl ObjectInterface for DirectoryReader {
-	async fn getdents(&self, _buf: &mut [MaybeUninit<u8>]) -> io::Result<usize> {
+	async fn getdents(&self, buf: &mut [MaybeUninit<u8>]) -> io::Result<usize> {
+		let _buf = buf;
 		let _ = &self.0; // Dummy statement to avoid warning for the moment
 		unimplemented!()
 	}
@@ -228,7 +228,6 @@ impl Filesystem {
 	}
 
 	/// Create new backing-fs at mountpoint mntpath
-	#[cfg(any(feature = "uhyve", feature = "virtio-fs"))]
 	pub fn mount(&self, path: &str, obj: Box<dyn VfsNode>) -> io::Result<()> {
 		debug!("Mounting {path}");
 
@@ -336,6 +335,8 @@ pub(crate) fn init() {
 	if crate::env::is_uhyve() {
 		uhyve::init();
 	}
+
+	dev_directory::init();
 }
 
 pub fn create_file(name: &str, data: &'static [u8], mode: AccessPermission) -> io::Result<()> {

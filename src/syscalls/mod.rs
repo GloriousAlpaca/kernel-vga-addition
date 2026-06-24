@@ -5,6 +5,7 @@ use alloc::ffi::CString;
 use core::alloc::{GlobalAlloc, Layout};
 use core::ffi::{CStr, c_char};
 use core::marker::PhantomData;
+use core::mem::MaybeUninit;
 use core::{ptr, slice};
 
 use dirent_display::Dirent64Display;
@@ -20,7 +21,6 @@ pub use self::spinlock::*;
 pub use self::system::*;
 pub use self::tasks::*;
 pub use self::timer::*;
-use crate::env;
 use crate::errno::{Errno, ToErrno};
 use crate::executor::block_on;
 use crate::fd::{
@@ -30,6 +30,7 @@ use crate::fd::{
 use crate::fs::{self, FileAttr, SeekWhence};
 #[cfg(all(target_os = "none", not(feature = "common-os")))]
 use crate::mm::ALLOCATOR;
+use crate::{env, init_buf};
 
 mod condvar;
 mod entropy;
@@ -272,7 +273,7 @@ pub(crate) fn shutdown(arg: i32) -> ! {
 	// This is a stable message used for detecting exit codes for different hypervisors.
 	panic_println!("exit status {arg}");
 
-	crate::arch::processor::shutdown(arg)
+	crate::arch::kernel::processor::shutdown(arg)
 }
 
 #[hermit_macro::system(errno)]
@@ -482,10 +483,6 @@ pub unsafe extern "C" fn sys_access(name: *const c_char, flags: i32) -> i32 {
 		return -i32::from(Errno::Inval);
 	};
 
-	if access_option.contains(AccessOption::F_OK) && access_option != AccessOption::F_OK {
-		return -i32::from(Errno::Inval);
-	}
-
 	let Ok(name) = unsafe { CStr::from_ptr(name) }.to_str() else {
 		return -i32::from(Errno::Inval);
 	};
@@ -519,7 +516,8 @@ pub extern "C" fn sys_close(fd: RawFd) -> i32 {
 #[hermit_macro::system(errno)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sys_read(fd: RawFd, buf: *mut u8, len: usize) -> isize {
-	let slice = unsafe { slice::from_raw_parts_mut(buf.cast(), len) };
+	let slice = unsafe { slice::from_raw_parts_mut(buf.cast::<MaybeUninit<u8>>(), len) };
+	let slice = init_buf::init_buf(slice);
 	fd::read(fd, slice).map_or_else(
 		|e| isize::try_from(-i32::from(e)).unwrap(),
 		|v| v.try_into().unwrap(),
@@ -684,12 +682,16 @@ pub unsafe extern "C" fn sys_ioctl(fd: RawFd, cmd: i32, argp: *mut core::ffi::c_
 #[hermit_macro::system(errno)]
 #[unsafe(no_mangle)]
 pub extern "C" fn sys_fcntl(fd: i32, cmd: i32, arg: i32) -> i32 {
+	const F_GETFD: i32 = 1;
 	const F_SETFD: i32 = 2;
 	const F_GETFL: i32 = 3;
 	const F_SETFL: i32 = 4;
 	const FD_CLOEXEC: i32 = 1;
 
 	if cmd == F_SETFD && arg == FD_CLOEXEC {
+		0
+	} else if cmd == F_GETFD {
+		// Only the FD_CLOEXEC flag is defined, and it has no effect in hermit, so always return 0
 		0
 	} else if cmd == F_GETFL {
 		let obj = get_object(fd);

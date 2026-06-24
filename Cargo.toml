@@ -220,6 +220,10 @@ virtio-vsock = ["virtio"]
 ## This is only useful on PCs (x86-64).
 vga = []
 
+## Enables the _Bochs Graphics Adapter_ (BGA) driver.
+##
+## This provides a linear framebuffer for pixel graphics and is primarily useful in QEMU/Bochs environments (x86-64).
+bga = []
 ## Enables the PS/2 keyboard driver.
 ##
 ## This is only useful on PCs (x86-64).
@@ -332,6 +336,7 @@ crossbeam-utils = { version = "0.8", default-features = false }
 delegate = "0.13"
 document-features = { version = "0.2", optional = true }
 elf = { version = "0.8", default-features = false }
+elf-symbols = "0.1"
 embedded-io = { version = "0.7", features = ["alloc"] }
 endian-num = { version = "0.2", optional = true, features = ["linux-types"] }
 enum_dispatch = "0.3"
@@ -393,7 +398,7 @@ memory_addresses = { version = "0.4", default-features = false, features = [
 
 [target.'cfg(target_arch = "riscv64")'.dependencies]
 riscv = "0.16"
-sbi-rt = "0.0.3"
+sbi-rt = "0.0.4"
 semihosting = { version = "0.1", optional = true }
 tock-registers = { version = "0.10", optional = true }
 trapframe = "0.10"

@@ -22,7 +22,7 @@ use smoltcp::wire::{DnsQueryType, IpAddress};
 #[cfg(feature = "dhcpv4")]
 use smoltcp::wire::{IpCidr, Ipv4Address, Ipv4Cidr};
 
-use crate::arch;
+use crate::arch::kernel::systemtime;
 use crate::drivers::net::{NetworkDevice, NetworkDriver};
 #[cfg(feature = "dns")]
 use crate::errno::Errno;
@@ -123,7 +123,7 @@ fn start_endpoint() -> u16 {
 
 #[inline]
 pub(crate) fn now() -> Instant {
-	Instant::from_micros_const(arch::kernel::systemtime::now_micros().try_into().unwrap())
+	Instant::from_micros_const(systemtime::now_micros().try_into().unwrap())
 }
 
 #[cfg(feature = "dhcpv4")]
@@ -246,19 +246,16 @@ async fn network_run() {
 
 		let now = now();
 
-		match nic.poll_common(now) {
-			PollResult::SocketStateChanged => {
-				// Progress was made
-				cx.waker().wake_by_ref();
-			}
-			PollResult::None => {
-				// Very likely no progress can be made, so set up a timer interrupt to wake the waker
-				NETWORK_WAKER.lock().register(cx.waker());
-				nic.set_polling_mode(false);
-				if let Some(wakeup_time) = nic.poll_delay(now).map(|d| d.total_micros()) {
-					create_timer(Source::Network, wakeup_time);
-					trace!("Configured an interrupt for {wakeup_time:?}");
-				}
+		if nic.poll_common(now) == PollResult::SocketStateChanged || cfg!(feature = "idle-poll") {
+			// Progress was made or we want to poll when idle.
+			cx.waker().wake_by_ref();
+		} else {
+			// Very likely no progress can be made, so set up a timer interrupt to wake the waker
+			NETWORK_WAKER.lock().register(cx.waker());
+			nic.set_polling_mode(false);
+			if let Some(wakeup_time) = nic.poll_delay(now).map(|d| d.total_micros()) {
+				create_timer(Source::Network, wakeup_time);
+				trace!("Configured an interrupt for {wakeup_time:?}");
 			}
 		}
 

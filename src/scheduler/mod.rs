@@ -8,8 +8,6 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::ptr;
-#[cfg(all(target_arch = "x86_64", feature = "smp"))]
-use core::sync::atomic::AtomicBool;
 use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 use ahash::RandomState;
@@ -20,17 +18,18 @@ use hermit_sync::*;
 use riscv::register::sstatus;
 use timer_interrupts::TimerList;
 
-use crate::arch::core_local::*;
+use crate::arch::kernel;
+use crate::arch::kernel::core_local::*;
+use crate::arch::kernel::scheduler::TaskStacks;
 #[cfg(target_arch = "riscv64")]
-use crate::arch::switch::switch_to_task;
+use crate::arch::kernel::switch::switch_to_task;
 #[cfg(target_arch = "x86_64")]
-use crate::arch::switch::{switch_to_fpu_owner, switch_to_task};
-use crate::arch::{get_processor_count, interrupts};
+use crate::arch::kernel::switch::{switch_to_fpu_owner, switch_to_task};
+use crate::arch::kernel::{get_processor_count, interrupts};
 use crate::errno::Errno;
 use crate::fd::{Fd, RawFd};
-use crate::kernel::scheduler::TaskStacks;
+use crate::io;
 use crate::scheduler::task::*;
-use crate::{arch, io};
 
 pub mod task;
 pub mod timer_interrupts;
@@ -40,8 +39,6 @@ static NO_TASKS: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "smp")]
 static SCHEDULER_INPUTS: SpinMutex<Vec<&InterruptTicketMutex<SchedulerInput>>> =
 	SpinMutex::new(Vec::new());
-#[cfg(all(target_arch = "x86_64", feature = "smp"))]
-static CORE_HLT_STATE: SpinMutex<Vec<&AtomicBool>> = SpinMutex::new(Vec::new());
 /// Map between Task ID and Queue of waiting tasks
 static WAITING_TASKS: InterruptTicketMutex<BTreeMap<TaskId, VecDeque<TaskHandle>>> =
 	InterruptTicketMutex::new(BTreeMap::new());
@@ -140,7 +137,7 @@ impl PerCoreSchedulerExt for &mut PerCoreScheduler {
 		use arm_gic::IntId;
 		use arm_gic::gicv3::{GicCpuInterface, SgiTarget, SgiTargetGroup};
 
-		use crate::interrupts::SGI_RESCHED;
+		use crate::arch::kernel::interrupts::SGI_RESCHED;
 
 		dsb(NSH);
 		isb(SY);
@@ -198,6 +195,8 @@ impl PerCoreSchedulerExt for &mut PerCoreScheduler {
 					self.custom_wakeup(task);
 				}
 			}
+
+			TASKS.lock().remove(&current_id);
 		});
 
 		self.reschedule();
@@ -292,7 +291,7 @@ impl PerCoreScheduler {
 		debug!("Creating task {tid} with priority {prio} on core {core_id}");
 
 		if wakeup {
-			arch::wakeup_core(core_id);
+			kernel::wakeup_core(core_id);
 		}
 
 		tid
@@ -367,7 +366,7 @@ impl PerCoreScheduler {
 
 		// Wake up the CPU
 		if wakeup {
-			arch::wakeup_core(core_id);
+			kernel::wakeup_core(core_id);
 		}
 
 		tid
@@ -415,7 +414,7 @@ impl PerCoreScheduler {
 				.wakeup_tasks
 				.push_back(task);
 			// Wake up the CPU
-			arch::wakeup_core(task.get_core_id());
+			kernel::wakeup_core(task.get_core_id());
 		}
 	}
 
@@ -891,17 +890,7 @@ pub(crate) fn add_current_core() {
 			core_id.try_into().unwrap(),
 			&CoreLocal::get().scheduler_input,
 		);
-		#[cfg(target_arch = "x86_64")]
-		CORE_HLT_STATE
-			.lock()
-			.insert(core_id.try_into().unwrap(), &CoreLocal::get().hlt);
 	}
-}
-
-#[inline]
-#[cfg(all(target_arch = "x86_64", feature = "smp", not(feature = "idle-poll")))]
-pub(crate) fn take_core_hlt_state(core_id: CoreId) -> bool {
-	CORE_HLT_STATE.lock()[usize::try_from(core_id).unwrap()].swap(false, Ordering::Acquire)
 }
 
 #[inline]
