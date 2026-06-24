@@ -42,6 +42,7 @@ default = [
 	"dhcpv4",
 	"fsgsbase",
 	"kernel-stack",
+    "keyboard",
 	"pci-ids",
 	"pci",
 	"smp",
@@ -50,6 +51,9 @@ default = [
 	"virtio-fs",
 	"virtio-net",
 	"virtio-vsock",
+    "newlib",
+    "vga",
+    "mman",
 ]
 
 #! ### Syscall Features
@@ -220,6 +224,11 @@ vga = []
 ##
 ## This provides a linear framebuffer for pixel graphics and is primarily useful in QEMU/Bochs environments (x86-64).
 bga = []
+## Enables the PS/2 keyboard driver.
+##
+## This is only useful on PCs (x86-64).
+keyboard = []   
+
 #! ### Performance Features
 
 ## Disables putting the CPU to sleep.
