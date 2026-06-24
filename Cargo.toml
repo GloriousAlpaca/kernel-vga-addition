@@ -51,6 +51,9 @@ default = [
 	"virtio-fs",
 	"virtio-net",
 	"virtio-vsock",
+    "newlib",
+    "vga",
+    "mman",
 ]
 
 #! ### Syscall Features
@@ -217,6 +220,10 @@ virtio-vsock = ["virtio"]
 ## This is only useful on PCs (x86-64).
 vga = []
 
+## Enables the _Bochs Graphics Adapter_ (BGA) driver.
+##
+## This provides a linear framebuffer for pixel graphics and is primarily useful in QEMU/Bochs environments (x86-64).
+bga = []
 ## Enables the PS/2 keyboard driver.
 ##
 ## This is only useful on PCs (x86-64).
