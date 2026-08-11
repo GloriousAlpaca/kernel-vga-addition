@@ -7,13 +7,12 @@ use free_list::{PageLayout, PageRange};
 use memory_addresses::{PhysAddr, VirtAddr};
 
 use super::interrupts::{IDT, IST_SIZE};
-use crate::arch::x86_64::kernel::core_local::*;
-use crate::arch::x86_64::kernel::{apic, interrupts};
-use crate::arch::x86_64::mm::paging::{
+use crate::arch::kernel::core_local::*;
+use crate::arch::kernel::{apic, interrupts};
+use crate::arch::mm::paging::{
 	BasePageSize, PageSize, PageTableEntryFlags, PageTableEntryFlagsExt,
 };
 use crate::config::*;
-use crate::env;
 use crate::mm::{FrameAlloc, PageAlloc, PageRangeAllocator};
 use crate::scheduler::task::{Task, TaskFrame};
 use crate::scheduler::{PerCoreSchedulerExt, timer_interrupts};
@@ -220,12 +219,10 @@ impl Drop for TaskStacks {
 					stacks.total_size >> 10,
 				);
 
-				if !env::is_uefi() {
-					crate::arch::mm::paging::unmap::<BasePageSize>(
-						stacks.virt_addr,
-						stacks.total_size / BasePageSize::SIZE as usize + 4,
-					);
-				}
+				crate::arch::mm::paging::unmap::<BasePageSize>(
+					stacks.virt_addr,
+					stacks.total_size / BasePageSize::SIZE as usize + 4,
+				);
 				let range = PageRange::from_start_len(
 					stacks.virt_addr.as_usize(),
 					stacks.total_size + 4 * BasePageSize::SIZE as usize,

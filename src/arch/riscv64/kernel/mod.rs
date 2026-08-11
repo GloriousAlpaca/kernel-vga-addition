@@ -8,7 +8,6 @@ pub mod pci;
 pub mod processor;
 pub mod scheduler;
 pub mod serial;
-mod start;
 pub mod switch;
 pub mod systemtime;
 use alloc::vec::Vec;
@@ -19,9 +18,9 @@ use free_list::PageLayout;
 use riscv::register::sstatus;
 
 pub(crate) use self::processor::{set_oneshot_timer, wakeup_core};
-use crate::arch::riscv64::kernel::core_local::core_id;
-pub use crate::arch::riscv64::kernel::devicetree::init_drivers;
-use crate::arch::riscv64::kernel::processor::lsb;
+use crate::arch::kernel::core_local::core_id;
+pub use crate::arch::kernel::devicetree::init_drivers;
+use crate::arch::kernel::processor::lsb;
 use crate::config::KERNEL_STACK_SIZE;
 use crate::env;
 use crate::init_cell::InitCell;
@@ -32,11 +31,11 @@ use crate::mm::{FrameAlloc, PageRangeAllocator};
 pub(crate) static HARTS_AVAILABLE: InitCell<Vec<usize>> = InitCell::new(Vec::new());
 
 /// Kernel header to announce machine features
-static CPU_ONLINE: AtomicU32 = AtomicU32::new(0);
-static CURRENT_BOOT_ID: AtomicU32 = AtomicU32::new(0);
-static CURRENT_STACK_ADDRESS: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
-static HART_MASK: AtomicU64 = AtomicU64::new(0);
-static NUM_CPUS: AtomicU32 = AtomicU32::new(0);
+pub(crate) static CPU_ONLINE: AtomicU32 = AtomicU32::new(0);
+pub(crate) static CURRENT_BOOT_ID: AtomicU32 = AtomicU32::new(0);
+pub(crate) static CURRENT_STACK_ADDRESS: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+pub(crate) static HART_MASK: AtomicU64 = AtomicU64::new(0);
+pub(crate) static NUM_CPUS: AtomicU32 = AtomicU32::new(0);
 
 // FUNCTIONS
 
@@ -149,14 +148,18 @@ pub fn boot_next_processor() {
 	// TODO: Old: Changing cpu_online will cause uhyve to start the next processor
 	CPU_ONLINE.fetch_add(1, Ordering::Release);
 
+	#[allow(clippy::needless_return)]
 	#[cfg(feature = "uhyve")]
 	if env::is_uhyve() {
 		return;
 	}
 
-	//When running bare-metal/QEMU we use the firmware to start the next hart
-	let start_addr = (start::_start as *const ()).expose_provenance();
-	sbi_rt::hart_start(next_hart_id as usize, start_addr, 0).unwrap();
+	#[cfg(feature = "smp")]
+	{
+		//When running bare-metal/QEMU we use the firmware to start the next hart
+		let start_addr = (crate::arch::start::smp::smp_start as *const ()).expose_provenance();
+		sbi_rt::hart_start(next_hart_id as usize, start_addr, 0).unwrap();
+	}
 }
 
 pub fn print_statistics() {

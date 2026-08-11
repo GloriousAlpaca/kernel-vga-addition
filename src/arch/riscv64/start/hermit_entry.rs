@@ -4,10 +4,11 @@ use core::sync::atomic::Ordering;
 use hermit_entry::Entry;
 use hermit_entry::boot_info::RawBootInfo;
 
-use super::{CPU_ONLINE, CURRENT_BOOT_ID, HART_MASK, NUM_CPUS};
-use crate::arch::riscv64::kernel::CURRENT_STACK_ADDRESS;
 #[cfg(not(feature = "smp"))]
-use crate::arch::riscv64::kernel::processor;
+use crate::arch::kernel::processor;
+use crate::arch::kernel::{
+	CPU_ONLINE, CURRENT_BOOT_ID, CURRENT_STACK_ADDRESS, HART_MASK, NUM_CPUS,
+};
 use crate::config::KERNEL_STACK_SIZE;
 use crate::env;
 
@@ -52,7 +53,7 @@ unsafe extern "C" fn pre_init(hart_id: usize, boot_info: Option<&'static RawBoot
 	if CPU_ONLINE.load(Ordering::Acquire) == 0 {
 		crate::logging::KERNEL_LOGGER.set_time(true);
 
-		env::set_boot_info(*boot_info.unwrap());
+		env::set_start_info(*boot_info.unwrap());
 		let fdt = env::fdt().unwrap();
 		// Init HART_MASK
 		let mut hart_mask = 0;
@@ -66,7 +67,7 @@ unsafe extern "C" fn pre_init(hart_id: usize, boot_info: Option<&'static RawBoot
 		}
 		NUM_CPUS.store(fdt.cpus().count().try_into().unwrap(), Ordering::Relaxed);
 		HART_MASK.store(hart_mask, Ordering::Relaxed);
-		crate::boot_processor_main()
+		crate::rt::boot_processor_main()
 	} else {
 		#[cfg(not(feature = "smp"))]
 		{
@@ -80,6 +81,6 @@ unsafe extern "C" fn pre_init(hart_id: usize, boot_info: Option<&'static RawBoot
 			}
 		}
 		#[cfg(feature = "smp")]
-		crate::application_processor_main();
+		crate::rt::application_processor_main();
 	}
 }

@@ -47,11 +47,10 @@ mod virtualmem;
 
 use core::alloc::Layout;
 use core::mem::MaybeUninit;
-use core::ops::Range;
 
 use align_address::Align;
 use free_list::{PageLayout, PageRange};
-use hermit_sync::{Lazy, RawInterruptTicketMutex};
+use hermit_sync::RawInterruptTicketMutex;
 pub use memory_addresses::{PhysAddr, VirtAddr};
 #[cfg(target_os = "none")]
 use talc::TalcLock;
@@ -61,35 +60,15 @@ use talc::source::Manual;
 pub use self::page_range_alloc::{PageRangeAllocator, PageRangeBox};
 pub use self::physicalmem::{FrameAlloc, FrameBox};
 pub use self::virtualmem::{PageAlloc, PageBox};
+use crate::arch;
 #[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
 use crate::arch::mm::paging::HugePageSize;
 pub use crate::arch::mm::paging::virtual_to_physical;
 use crate::arch::mm::paging::{BasePageSize, LargePageSize, PageSize};
-use crate::{arch, env};
 
 #[cfg(target_os = "none")]
 #[global_allocator]
 pub(crate) static ALLOCATOR: TalcLock<RawInterruptTicketMutex, Manual> = TalcLock::new(Manual);
-
-/// Physical and virtual address range of the 2 MiB pages that map the kernel.
-static KERNEL_ADDR_RANGE: Lazy<Range<VirtAddr>> = Lazy::new(|| {
-	if cfg!(target_os = "none") {
-		// Calculate the start and end addresses of the 2 MiB page(s) that map the kernel.
-		let start = VirtAddr::from_ptr(elf_symbols::executable_start());
-		let end = VirtAddr::from_ptr(elf_symbols::executable_end());
-		start.align_down(LargePageSize::SIZE)..end.align_up(LargePageSize::SIZE)
-	} else {
-		VirtAddr::zero()..VirtAddr::zero()
-	}
-});
-
-pub(crate) fn kernel_start_address() -> VirtAddr {
-	KERNEL_ADDR_RANGE.start
-}
-
-pub(crate) fn kernel_end_address() -> VirtAddr {
-	KERNEL_ADDR_RANGE.end
-}
 
 #[cfg(target_os = "none")]
 pub(crate) fn claim_initial_heap() {
@@ -114,19 +93,12 @@ pub(crate) fn claim_initial_heap() {
 pub(crate) fn init() {
 	use crate::arch::mm::paging;
 
-	Lazy::force(&KERNEL_ADDR_RANGE);
-
 	unsafe {
 		arch::mm::init();
 	}
 
 	let total_mem = physicalmem::total_memory_size();
-	let kernel_addr_range = KERNEL_ADDR_RANGE.clone();
 	info!("Total memory size: {} MiB", total_mem >> 20);
-	info!(
-		"Kernel region: {:p}..{:p}",
-		kernel_addr_range.start, kernel_addr_range.end
-	);
 
 	// we reserve physical memory for the required page tables
 	// In worst case, we use page size of BasePageSize::SIZE
@@ -135,20 +107,12 @@ pub(crate) fn init() {
 	let npage_3tables = npages / npage_div + 1;
 	let npage_2tables = npage_3tables / npage_div + 1;
 	let npage_1tables = npage_2tables / npage_div + 1;
-	let reserved_space = (npage_3tables + npage_2tables + npage_1tables)
-		* BasePageSize::SIZE as usize
+	let min_mem = (npage_3tables + npage_2tables + npage_1tables) * BasePageSize::SIZE as usize
 		+ 2 * LargePageSize::SIZE as usize;
 	#[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
 	let has_1gib_pages = arch::kernel::processor::supports_1gib_pages();
 	let has_2mib_pages = arch::kernel::processor::supports_2mib_pages();
 
-	let min_mem = if env::is_uefi() {
-		// On UEFI, the given memory is guaranteed free memory and the kernel is located before the given memory
-		reserved_space
-	} else {
-		(kernel_addr_range.end.as_u64() - env::get_ram_address().unwrap().as_u64()
-			+ reserved_space as u64) as usize
-	};
 	info!("Minimum memory size: {} MiB", min_mem >> 20);
 	let avail_mem = total_mem
 		.checked_sub(min_mem)

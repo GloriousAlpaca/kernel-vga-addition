@@ -8,7 +8,6 @@ use core::arch::x86_64::{
 };
 use core::fmt;
 use core::hint::spin_loop;
-use core::num::NonZero;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use hermit_sync::Lazy;
@@ -25,8 +24,8 @@ use x86_64::structures::DescriptorTablePointer;
 use x86_64::{VirtAddr, instructions};
 
 #[cfg(feature = "acpi")]
-use crate::arch::x86_64::kernel::acpi;
-use crate::arch::x86_64::kernel::{interrupts, pic, pit};
+use crate::arch::kernel::acpi;
+use crate::arch::kernel::{interrupts, pic, pit};
 use crate::env;
 
 /// See <http://biosbits.org>.
@@ -351,32 +350,24 @@ impl CpuFrequency {
 	}
 
 	fn detect_from_fdt(&mut self) -> Result<(), ()> {
-		fn mhz_from_fdt() -> Option<NonZero<u16>> {
-			let khz = env::fdt()?
-				.find_node("/hermit,tsc")?
-				.property("khz")?
-				.as_usize()?;
-			let khz = u32::try_from(khz).ok()?;
-			let mhz = u16::try_from(khz / 1000).ok()?;
-			NonZero::new(mhz)
-		}
-
-		let mhz = mhz_from_fdt().ok_or(())?;
-		self.set_detected_cpu_frequency(mhz.get(), CpuFrequencySources::Fdt)?;
-
-		Ok(())
-	}
-
-	fn detect_from_hypervisor(&mut self) -> Result<(), ()> {
 		#[cfg(feature = "uhyve")]
 		{
-			let cpu_freq = env::uhyve_cpu_freq().ok_or(())?.get();
-			let mhz = cpu_freq / 1000;
+			use core::num::NonZero;
 
-			self.set_detected_cpu_frequency(
-				mhz.try_into().unwrap(),
-				CpuFrequencySources::Hypervisor,
-			)
+			fn mhz_from_fdt() -> Option<NonZero<u16>> {
+				let khz = env::fdt()?
+					.find_node("/hermit,tsc")?
+					.property("khz")?
+					.as_usize()?;
+				let khz = u32::try_from(khz).ok()?;
+				let mhz = u16::try_from(khz / 1000).ok()?;
+				NonZero::new(mhz)
+			}
+
+			let mhz = mhz_from_fdt().ok_or(())?;
+			self.set_detected_cpu_frequency(mhz.get(), CpuFrequencySources::Fdt)?;
+
+			Ok(())
 		}
 
 		#[cfg(not(feature = "uhyve"))]
@@ -399,7 +390,7 @@ impl CpuFrequency {
 
 	#[cfg(target_os = "none")]
 	fn measure_frequency(&mut self) -> Result<(), ()> {
-		use crate::arch::x86_64::kernel::interrupts::IDT;
+		use crate::arch::kernel::interrupts::IDT;
 
 		// Measure the CPU frequency by counting 3 ticks of a 100Hz timer.
 		let tick_count = 3;
@@ -477,7 +468,6 @@ impl CpuFrequency {
 				.or_else(|_e| self.detect_from_cpuid(&cpuid))
 				.or_else(|_e| self.detect_from_cpuid_tsc_info(&cpuid))
 				.or_else(|_e| self.detect_from_cpuid_hypervisor_info(&cpuid))
-				.or_else(|_e| self.detect_from_hypervisor())
 				.or_else(|_e| self.detect_from_cmdline())
 				.or_else(|_e| self.detect_from_cpuid_brand_string(&cpuid))
 				.or_else(|_e| self.measure_frequency())
@@ -889,7 +879,7 @@ pub fn configure() {
 		use x86_64::registers::rflags::RFlags;
 		use x86_64::structures::gdt::SegmentSelector;
 
-		use crate::arch::x86_64::kernel::syscall;
+		use crate::arch::kernel::syscall;
 
 		let has_syscall = match cpuid.get_extended_processor_and_feature_identifiers() {
 			Some(finfo) => finfo.has_syscall_sysret(),

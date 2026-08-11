@@ -17,6 +17,13 @@ use super::network::{NetworkInterface, NetworkState};
 use crate::arch::kernel::systemtime;
 #[cfg(feature = "write-pcap-file")]
 use crate::drivers::Driver;
+#[cfg(any(
+	all(target_arch = "riscv64", feature = "gem-net", not(feature = "pci")),
+	feature = "rtl8139",
+	feature = "virtio-net",
+	feature = "write-pcap-file"
+))]
+use crate::drivers::net::NetworkDevice;
 use crate::drivers::net::NetworkDriver;
 
 cfg_select! {
@@ -26,7 +33,6 @@ cfg_select! {
 		feature = "virtio-net",
 	) => {
 		use hermit_sync::SpinMutex;
-		use crate::drivers::net::NetworkDevice;
 
 		pub(crate) static NETWORK_DEVICE: SpinMutex<Option<NetworkDevice>> = SpinMutex::new(None);
 	}
@@ -43,13 +49,19 @@ impl<'a> NetworkInterface<'a> {
 				feature = "rtl8139",
 				feature = "virtio-net",
 			) => {
-				#[cfg_attr(any(feature = "net-trace", feature = "write-pcap-file"), expect(unused_mut))]
+				#[cfg_attr(
+					any(feature = "net-trace", feature = "write-pcap-file"),
+					expect(unused_mut)
+				)]
 				let Some(mut device) = NETWORK_DEVICE.lock().take() else {
 					return NetworkState::InitializationFailed;
 				};
 			}
 			_ => {
-				#[cfg_attr(any(feature = "net-trace", feature = "write-pcap-file"), expect(unused_mut))]
+				#[cfg_attr(
+					any(feature = "net-trace", feature = "write-pcap-file"),
+					expect(unused_mut)
+				)]
 				let mut device = LoopbackDriver::new();
 			}
 		}
@@ -59,7 +71,7 @@ impl<'a> NetworkInterface<'a> {
 		#[cfg_attr(feature = "net-trace", expect(unused_mut))]
 		#[cfg(feature = "write-pcap-file")]
 		let mut device = {
-			let default_name = device.get_name();
+			let default_name = NetworkDevice::get_name();
 			PcapWriter::new(
 				device,
 				pcap_writer::FileSink::new(default_name),

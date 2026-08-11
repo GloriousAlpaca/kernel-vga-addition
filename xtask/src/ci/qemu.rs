@@ -14,6 +14,7 @@ use wait_timeout::ChildExt as _;
 use xshell::cmd;
 
 use crate::arch::Arch;
+use crate::ci;
 
 const DEFAULT_GUEST_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 5, 3));
 
@@ -51,6 +52,10 @@ pub struct Qemu {
 	/// Use a TAP device for networking.
 	#[arg(long)]
 	tap: bool,
+
+	/// Arguments to pass to QEMU and Hermit, separated by another `--`.
+	#[arg(last = true)]
+	qemu_and_hermit_args: Vec<String>,
 }
 
 #[derive(ValueEnum, PartialEq, Eq, Clone, Copy)]
@@ -101,6 +106,8 @@ impl Qemu {
 	) -> Result<()> {
 		let sh = crate::sh()?;
 
+		let (qemu_args, hermit_args) = ci::split_args(&self.qemu_and_hermit_args);
+
 		let virtiofsd = self
 			.devices
 			.iter()
@@ -136,7 +143,8 @@ impl Qemu {
 			.args(&["-m".to_owned(), format!("{memory}M")])
 			.args(&["-global", "virtio-mmio.force-legacy=off"])
 			.args(self.device_args(memory))
-			.args(self.cmdline_args(image_name));
+			.args(qemu_args)
+			.args(self.cmdline_args(image_name, hermit_args));
 
 		eprintln!("$ {qemu}");
 		let mut qemu = Command::from(qemu);
@@ -174,7 +182,11 @@ impl Qemu {
 					.iter()
 					.flat_map(|s| s.split(&[' ', ','][..]))
 					.any(|feature| feature == "client");
-				test_vsock(has_client)?;
+				if has_client {
+					test_vsock_client()?;
+				} else {
+					test_vsock_server()?;
+				}
 			}
 			_ => {}
 		}
@@ -482,10 +494,14 @@ impl Qemu {
 			.collect()
 	}
 
-	fn cmdline_args(&self, image_name: &str) -> Vec<String> {
+	fn cmdline_args(&self, image_name: &str, hermit_args: &[String]) -> Vec<String> {
+		let (user_kernel_args, user_app_args) = ci::split_args(hermit_args);
+
 		let mut cmdline = self.kernel_args();
+		cmdline.extend(user_kernel_args.iter().cloned());
 
 		let mut app_args = self.app_args(image_name);
+		app_args.extend(user_app_args.iter().cloned());
 		if !app_args.is_empty() {
 			cmdline.push("--".to_owned());
 			cmdline.append(&mut app_args);
@@ -598,16 +614,7 @@ fn test_stdin(child: &mut Child) -> Result<()> {
 	Ok(())
 }
 
-fn test_vsock(has_client: bool) -> Result<()> {
-	let mut stream = if has_client {
-		let listener = VsockListener::bind_with_cid_port(vsock::VMADDR_CID_ANY, 9975)?;
-		let (stream, _addr) = listener.accept()?;
-		stream
-	} else {
-		thread::sleep(Duration::from_secs(10));
-		VsockStream::connect_with_cid_port(3, 9975)?
-	};
-
+fn test_vsock_connection(mut stream: VsockStream) -> Result<()> {
 	let messages = ["Hello, there!", "Hello, again!", "Bye-bye!"];
 	for message in messages {
 		writeln!(&mut stream, "{message}")?;
@@ -620,6 +627,33 @@ fn test_vsock(has_client: bool) -> Result<()> {
 	let s = str::from_utf8(&buf[0..n])?;
 	let received_messages = s.trim().split('\n').collect::<Vec<_>>();
 	assert_eq!(received_messages, messages);
+
+	Ok(())
+}
+
+fn test_vsock_client() -> Result<()> {
+	let listener = VsockListener::bind_with_cid_port(vsock::VMADDR_CID_ANY, 9975)?;
+	let (stream, _addr) = listener.accept()?;
+
+	test_vsock_connection(stream)?;
+
+	let dur = Duration::from_secs(10);
+	eprintln!("[CI] Sleeping {dur:?} to free up VSOCK port again.");
+	thread::sleep(dur);
+
+	Ok(())
+}
+
+fn test_vsock_server() -> Result<()> {
+	thread::sleep(Duration::from_secs(10));
+
+	for i in 0usize..10 {
+		eprintln!("[CI] Opening connection {i}...");
+		let stream = VsockStream::connect_with_cid_port(3, 9975)?;
+
+		test_vsock_connection(stream)?;
+		thread::sleep(Duration::from_secs(1));
+	}
 
 	Ok(())
 }

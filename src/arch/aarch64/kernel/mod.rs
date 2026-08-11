@@ -10,8 +10,6 @@ pub mod pci;
 pub mod processor;
 pub mod scheduler;
 pub mod serial;
-#[cfg(target_os = "none")]
-mod start;
 pub mod systemtime;
 
 use alloc::alloc::alloc;
@@ -22,8 +20,8 @@ use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 
 pub(crate) use self::interrupts::wakeup_core;
 pub(crate) use self::processor::set_oneshot_timer;
-use crate::arch::aarch64::kernel::core_local::*;
-use crate::arch::aarch64::mm::paging::{BasePageSize, PageSize};
+use crate::arch::kernel::core_local::*;
+use crate::arch::mm::paging::{BasePageSize, PageSize};
 use crate::config::*;
 
 #[repr(align(8))]
@@ -37,7 +35,7 @@ pub(crate) static CPU_ONLINE: AlignedAtomicU32 = AlignedAtomicU32(AtomicU32::new
 pub(crate) static CURRENT_STACK_ADDRESS: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
 
 #[cfg(target_os = "none")]
-global_asm!(include_str!("start.s"));
+global_asm!(include_str!("exceptions.s"));
 
 #[cfg(feature = "smp")]
 pub fn get_possible_cpus() -> u32 {
@@ -112,7 +110,7 @@ pub fn boot_next_processor() {
 
 		use memory_addresses::VirtAddr;
 
-		use crate::arch::aarch64::kernel::start::{TTBR0, smp_start};
+		use crate::arch::start::smp::{TTBR0, smp_start};
 		use crate::mm::virtual_to_physical;
 
 		if cpu_online == 0 {

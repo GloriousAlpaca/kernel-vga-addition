@@ -1,6 +1,7 @@
 use core::arch::asm;
 use core::{fmt, mem};
 
+use aarch64_cpu::asm::random::ArmRng;
 use aarch64_cpu::registers::*;
 use hermit_sync::{Lazy, OnceCell, without_interrupts};
 
@@ -197,7 +198,13 @@ impl fmt::Display for CpuFrequency {
 }
 
 pub fn seed_entropy() -> Option<[u8; 32]> {
-	None
+	let rng = ArmRng::new()?;
+	let mut buf = [0u8; 32];
+	for word in buf.chunks_mut(8) {
+		let value = rng.rndr()?.to_ne_bytes();
+		word.copy_from_slice(&value);
+	}
+	Some(buf)
 }
 
 /// The halt function stops the processor until the next interrupt arrives
@@ -212,9 +219,7 @@ pub fn shutdown(error_code: i32) -> ! {
 	info!("Shutting down system");
 
 	cfg_select! {
-		feature = "semihosting" => {
-			semihosting::process::exit(error_code)
-		}
+		feature = "semihosting" => semihosting::process::exit(error_code),
 		_ => {
 			unsafe {
 				const PSCI_SYSTEM_OFF: u64 = 0x8400_0008;
